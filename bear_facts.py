@@ -6,33 +6,44 @@ Umgebung: GEMINI_API_KEY (gratis über Google AI Studio)
 Dateien:  assets/bear_closed.png, assets/bear_open.png (gleiche Größe, transparent)
 Ausgabe:  output/video.mp4, output/caption.txt, facts_log.json
 """
-import asyncio, bisect, json, os, subprocess, textwrap, time
+import asyncio, bisect, json, os, random, subprocess, textwrap, time
 import edge_tts, numpy as np, requests
 from PIL import Image, ImageDraw, ImageFont
 
 KEY = os.environ["GEMINI_API_KEY"]
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.1-flash-lite"]
 FONT = os.getenv("FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 VOICE, W, H, FPS, MIN_SEC = "de-DE-ConradNeural", 1080, 1920, 24, 62
 LOG, OUT = "facts_log.json", "output"
 
 
 def gemini(prompt):
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={KEY}",
-        json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"responseMimeType": "application/json"}},
-        timeout=120)
+    for model in MODELS:  # falls ein Modellname abgeschaltet wurde (404), das nächste probieren
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={KEY}",
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json"}},
+            timeout=120)
+        if r.status_code != 404:
+            break
     r.raise_for_status()
     time.sleep(6)  # Gratis-Limit einhalten
     return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
 
 
 def article():
-    r = requests.get("https://de.wikipedia.org/w/api.php", headers={"User-Agent": "BearFacts/1.0"},
-                     params={"action": "query", "generator": "random", "grnnamespace": 0,
-                             "prop": "extracts", "explaintext": 1, "exlimit": 1, "format": "json"},
-                     timeout=30).json()
+    api, ua = "https://de.wikipedia.org/w/api.php", {"User-Agent": "BearFacts/1.0"}
+    topic = open("topic.txt", encoding="utf-8").read().strip() if os.path.exists("topic.txt") else ""
+    pick = {"generator": "random", "grnnamespace": 0}
+    if topic:  # Wunschthema aus den Kommentaren (comments.py)
+        hits = requests.get(api, headers=ua, timeout=30, params={
+            "action": "query", "list": "search", "srsearch": topic, "srlimit": 10,
+            "srnamespace": 0, "format": "json"}).json()["query"]["search"]
+        if hits:
+            pick = {"titles": random.choice(hits)["title"]}
+    r = requests.get(api, headers=ua, timeout=30,
+                     params={"action": "query", "prop": "extracts", "explaintext": 1, "exlimit": 1,
+                             "format": "json", **pick}).json()
     p = next(iter(r["query"]["pages"].values()))
     return p["title"], p.get("extract", "")[:6000]
 
@@ -111,29 +122,3 @@ if __name__ == "__main__":
         f"{d['caption']}\n\nQuelle: Wikipedia – {title}\n#KIgeneriert")
     json.dump(log + [title], open(LOG, "w"), ensure_ascii=False)
     print(f"Fertig: {OUT}/video.mp4 ({dur:.0f} s) – {title}")
-
-import os, time, requests
-
-B = "https://graph.instagram.com"
-uid, tok = os.environ["IG_USER_ID"], os.environ["IG_TOKEN"]
-caption = open("output/caption.txt", encoding="utf-8").read()
-
-r = requests.post(f"{B}/{uid}/media", data={"media_type": "REELS", "video_url": os.environ["VIDEO_URL"],
-                                            "caption": caption, "access_token": tok})
-r.raise_for_status()
-cid = r.json()["id"]
-
-for _ in range(40):
-    s = requests.get(f"{B}/{cid}", params={"fields": "status_code", "access_token": tok}).json().get("status_code")
-    if s == "FINISHED":
-        break
-    if s == "ERROR":
-        raise SystemExit("Instagram konnte das Video nicht verarbeiten")
-    time.sleep(10)
-else:
-    raise SystemExit("Zeitüberschreitung bei der Verarbeitung")
-
-requests.post(f"{B}/{uid}/media_publish", data={"creation_id": cid, "access_token": tok}).raise_for_status()
-print("Auf Instagram veröffentlicht")
-
-
