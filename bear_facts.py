@@ -42,21 +42,26 @@ def gemini(prompt):
     raise SystemExit("Gemini nicht erreichbar oder Limit erreicht")
 
 
-def article():
+def article(log):
     api, ua = "https://de.wikipedia.org/w/api.php", {"User-Agent": "BearFacts/1.0"}
     topic = open("topic.txt", encoding="utf-8").read().strip() if os.path.exists("topic.txt") else ""
-    pick = {"generator": "random", "grnnamespace": 0}
     if topic:  # Wunschthema aus den Kommentaren (comments.py)
-        hits = requests.get(api, headers=ua, timeout=30, params={
-            "action": "query", "list": "search", "srsearch": topic, "srlimit": 10,
-            "srnamespace": 0, "format": "json"}).json()["query"]["search"]
-        if hits:
-            pick = {"titles": random.choice(hits)["title"]}
-    r = requests.get(api, headers=ua, timeout=30,
-                     params={"action": "query", "prop": "extracts", "explaintext": 1, "exlimit": 1,
-                             "format": "json", **pick}).json()
+        q = {"list": "search", "srsearch": topic, "srlimit": 20, "srnamespace": 0}
+    else:
+        q = {"list": "random", "rnnamespace": 0, "rnlimit": 20}
+    res = requests.get(api, headers=ua, timeout=30, params={"action": "query", "format": "json", **q}).json()["query"]
+    titles = [h["title"] for h in res.get("search", res.get("random", [])) if h["title"] not in log]
+    if not titles:
+        return None, ""
+    # Ein günstiger Aufruf wählt den besten Titel, statt jeden Artikel einzeln zu prüfen (spart Gratis-Kontingent)
+    i = gemini("Titel:\n" + "\n".join(f"{n}: {t}" for n, t in enumerate(titles)) +
+               "\n\nWelcher Artikel eignet sich am besten für einen überraschenden Wissensfakt für ein breites "
+               'Publikum? JSON: {"index": 0}').get("index", 0)
+    title = titles[i] if isinstance(i, int) and 0 <= i < len(titles) else titles[0]
+    r = requests.get(api, headers=ua, timeout=30, params={
+        "action": "query", "prop": "extracts", "explaintext": 1, "exlimit": 1, "titles": title, "format": "json"}).json()
     p = next(iter(r["query"]["pages"].values()))
-    return p["title"], p.get("extract", "")[:6000]
+    return title, p.get("extract", "")[:6000]
 
 
 def tts(text, path):
@@ -71,9 +76,9 @@ def tts(text, path):
 
 
 def make_content(log):
-    for _ in range(25):
-        title, text = article()
-        if title in log or len(text) < 3000:
+    for _ in range(8):
+        title, text = article(log)
+        if title is None or len(text) < 3000:
             continue
         d = gemini(f"""Quelle (Wikipedia: {title}):\n{text}\n
 Enthält die Quelle einen wirklich überraschenden Fakt, der ein breites Publikum interessiert?
