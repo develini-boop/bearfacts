@@ -136,42 +136,4 @@ else:
 requests.post(f"{B}/{uid}/media_publish", data={"creation_id": cid, "access_token": tok}).raise_for_status()
 print("Auf Instagram veröffentlicht")
 
-name: daily
-on:
-  schedule:
-    - cron: "0 15 * * *"
-  workflow_dispatch:
-permissions:
-  contents: write
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install requests numpy pillow edge-tts
-      - run: python bear_facts.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - name: Video veröffentlichen (öffentliche URL für Instagram)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="v$(date +%Y%m%d-%H%M)"
-          gh release create "$TAG" output/video.mp4 --title "$TAG" --notes-file output/caption.txt
-          echo "VIDEO_URL=https://github.com/${{ github.repository }}/releases/download/$TAG/video.mp4" >> "$GITHUB_ENV"
-      - name: Faktenliste speichern
-        run: |
-          git config user.name "bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add facts_log.json
-          git commit -m "log" || true
-          git push
-      - run: python upload_instagram.py
-        env:
-          IG_USER_ID: ${{ secrets.IG_USER_ID }}
-          IG_TOKEN: ${{ secrets.IG_TOKEN }}
-          VIDEO_URL: ${{ env.VIDEO_URL }}
+
