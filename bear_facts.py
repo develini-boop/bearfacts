@@ -18,17 +18,28 @@ LOG, OUT = "facts_log.json", "output"
 
 
 def gemini(prompt):
-    for model in MODELS:  # falls ein Modellname abgeschaltet wurde (404), das nächste probieren
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={KEY}",
-            json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"responseMimeType": "application/json"}},
-            timeout=120)
-        if r.status_code != 404:
-            break
-    r.raise_for_status()
-    time.sleep(6)  # Gratis-Limit einhalten
-    return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}}
+    for attempt in range(3):
+        for model in MODELS:  # bei Timeout, 404, 429 oder Serverfehler das nächste Modell probieren
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={KEY}",
+                    json=body, timeout=60)
+            except requests.RequestException as e:
+                print(model, "nicht erreichbar:", type(e).__name__)
+                continue
+            if r.ok:
+                try:
+                    out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+                    time.sleep(6)  # Gratis-Limit einhalten
+                    return out
+                except (KeyError, ValueError):
+                    print(model, "unbrauchbare Antwort")
+                    continue
+            print(model, r.status_code, r.text[:200])
+        time.sleep(20)
+    raise SystemExit("Gemini nicht erreichbar oder Limit erreicht")
 
 
 def article():
