@@ -76,13 +76,9 @@ def ask(prompt):
 
 def article(log):
     api, ua = "https://de.wikipedia.org/w/api.php", {"User-Agent": "BearFacts/1.0"}
-    topic = open("topic.txt", encoding="utf-8").read().strip() if os.path.exists("topic.txt") else ""
-    if topic:  # Wunschthema aus den Kommentaren (comments.py)
-        q = {"list": "search", "srsearch": topic, "srlimit": 20, "srnamespace": 0}
-    else:
-        q = {"list": "random", "rnnamespace": 0, "rnlimit": 20}
-    res = requests.get(api, headers=ua, timeout=30, params={"action": "query", "format": "json", **q}).json()["query"]
-    titles = [h["title"] for h in res.get("search", res.get("random", [])) if h["title"] not in log]
+    res = requests.get(api, headers=ua, timeout=30, params={
+        "action": "query", "format": "json", "list": "random", "rnnamespace": 0, "rnlimit": 20}).json()["query"]
+    titles = [h["title"] for h in res["random"] if h["title"] not in log]
     if titles:  # nur Artikel mit genug Text (Seitenlänge), damit nicht ständig zu kurze gewählt werden
         pages = requests.get(api, headers=ua, timeout=30, params={
             "action": "query", "prop": "info", "titles": "|".join(titles), "format": "json"}).json()["query"]["pages"]
