@@ -13,7 +13,9 @@ from PIL import Image, ImageDraw, ImageFont
 KEY = os.environ["GEMINI_API_KEY"]
 MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.1-flash-lite"]
 FONT = os.getenv("FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
-VOICE, W, H, FPS, MIN_SEC = "de-DE-ConradNeural", 1080, 1920, 24, 62
+VOICE = os.getenv("VOICE", "de-DE-ConradNeural")
+PITCH, RATE = "-12Hz", "-8%"  # tiefer und ruhiger
+W, H, FPS, MIN_SEC = 1080, 1920, 24, 62
 LOG, OUT = "facts_log.json", "output"
 
 
@@ -65,7 +67,7 @@ def article(log):
 
 
 def tts(text, path):
-    asyncio.run(edge_tts.Communicate(text, VOICE).save(path))
+    asyncio.run(edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH).save(path))
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
                          capture_output=True, check=True).stdout
     a = np.frombuffer(raw, np.int16).astype(float)
