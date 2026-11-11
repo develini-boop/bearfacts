@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Täglicher Fakt-Clip: Wikipedia -> Gemini (Skript + Faktencheck) -> edge-tts -> Bär-Video.
+"""Täglicher Fakt-Clip: Wikipedia -> Groq/Gemini (Skript + Faktencheck) -> edge-tts -> Bär-Video.
 
 Benötigt: pip install requests numpy pillow edge-tts   |   ffmpeg im PATH
-Umgebung: GEMINI_API_KEY (gratis über Google AI Studio)
+Umgebung: GROQ_API_KEY (gratis, console.groq.com) und/oder GEMINI_API_KEY (gratis, Google AI Studio)
 Dateien:  assets/bear_closed.png, assets/bear_open.png (gleiche Größe, transparent)
 Ausgabe:  output/video.mp4, output/caption.txt, facts_log.json
 """
@@ -10,8 +10,11 @@ import asyncio, bisect, json, os, random, subprocess, textwrap, time
 import edge_tts, numpy as np, requests
 from PIL import Image, ImageDraw, ImageFont
 
-KEY = os.environ["GEMINI_API_KEY"]
-MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.1-flash-lite"]
+KEY, GROQ_KEY = os.getenv("GEMINI_API_KEY"), os.getenv("GROQ_API_KEY")
+if not (KEY or GROQ_KEY):
+    raise SystemExit("Es fehlt GROQ_API_KEY oder GEMINI_API_KEY")
+MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.1-flash-lite"] if KEY else []
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 FONT = os.getenv("FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 VOICE = os.getenv("VOICE", "de-DE-ConradNeural")
 PITCH, RATE = "-12Hz", "-8%"  # tiefer und ruhiger
@@ -19,10 +22,37 @@ W, H, FPS, MIN_SEC = 1080, 1920, 24, 62
 LOG, OUT = "facts_log.json", "output"
 
 
-def gemini(prompt):
+def ask_groq(prompt):
+    try:
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                          headers={"Authorization": f"Bearer {GROQ_KEY}"}, timeout=90,
+                          json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+                                "response_format": {"type": "json_object"}, "reasoning_effort": "low"})
+    except requests.RequestException as e:
+        print("groq nicht erreichbar:", type(e).__name__)
+        return None
+    if not r.ok:
+        print("groq", r.status_code, r.text[:200])
+        return None
+    try:
+        return json.loads(r.json()["choices"][0]["message"]["content"])
+    except (KeyError, ValueError):
+        print("groq: unbrauchbare Antwort")
+        return None
+
+
+def ask(prompt):
+    """Antwort als JSON: erst Groq (falls Key vorhanden), dann Gemini."""
+    if GROQ_KEY:
+        for _ in range(2):
+            out = ask_groq(prompt)
+            if out is not None:
+                time.sleep(6)  # Gratis-Limit einhalten
+                return out
+            time.sleep(15)
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"}}
-    for attempt in range(3):
+    for attempt in range(3 if MODELS else 0):
         for model in MODELS:  # bei Timeout, 404, 429 oder Serverfehler das nächste Modell probieren
             try:
                 r = requests.post(
@@ -34,14 +64,14 @@ def gemini(prompt):
             if r.ok:
                 try:
                     out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-                    time.sleep(6)  # Gratis-Limit einhalten
+                    time.sleep(6)
                     return out
                 except (KeyError, ValueError):
                     print(model, "unbrauchbare Antwort")
                     continue
             print(model, r.status_code, r.text[:200])
         time.sleep(20)
-    raise SystemExit("Gemini nicht erreichbar oder Limit erreicht")
+    raise SystemExit("KI nicht erreichbar oder Limit erreicht")
 
 
 def article(log):
@@ -53,10 +83,14 @@ def article(log):
         q = {"list": "random", "rnnamespace": 0, "rnlimit": 20}
     res = requests.get(api, headers=ua, timeout=30, params={"action": "query", "format": "json", **q}).json()["query"]
     titles = [h["title"] for h in res.get("search", res.get("random", [])) if h["title"] not in log]
+    if titles:  # nur Artikel mit genug Text (Seitenlänge), damit nicht ständig zu kurze gewählt werden
+        pages = requests.get(api, headers=ua, timeout=30, params={
+            "action": "query", "prop": "info", "titles": "|".join(titles), "format": "json"}).json()["query"]["pages"]
+        titles = [p["title"] for p in pages.values() if p.get("length", 0) >= 10000]
     if not titles:
         return None, ""
     # Ein günstiger Aufruf wählt den besten Titel, statt jeden Artikel einzeln zu prüfen (spart Gratis-Kontingent)
-    i = gemini("Titel:\n" + "\n".join(f"{n}: {t}" for n, t in enumerate(titles)) +
+    i = ask("Titel:\n" + "\n".join(f"{n}: {t}" for n, t in enumerate(titles)) +
                "\n\nWelcher Artikel eignet sich am besten für einen überraschenden Wissensfakt für ein breites "
                'Publikum? JSON: {"index": 0}').get("index", 0)
     title = titles[i] if isinstance(i, int) and 0 <= i < len(titles) else titles[0]
@@ -81,8 +115,9 @@ def make_content(log):
     for _ in range(8):
         title, text = article(log)
         if title is None or len(text) < 3000:
+            print("kein ausreichend langer Artikel, neuer Versuch")
             continue
-        d = gemini(f"""Quelle (Wikipedia: {title}):\n{text}\n
+        d = ask(f"""Quelle (Wikipedia: {title}):\n{text}\n
 Enthält die Quelle einen wirklich überraschenden Fakt, der ein breites Publikum interessiert?
 Wenn nein: {{"ok": false}}
 Wenn ja: Schreibe auf Deutsch einen Sprechtext mit 180-200 Wörtern für ein Kurzvideo: Hook (Frage oder
@@ -91,14 +126,18 @@ als Nächstes kommen soll. Verwende AUSSCHLIESSLICH Informationen aus der Quelle
 keine Regieanweisungen, reiner Fließtext.
 JSON: {{"ok": true, "script": "...", "caption": "Kurzbeschreibung mit 3 Hashtags"}}""")
         if not d.get("ok"):
+            print("verworfen (kein überraschender Fakt):", title)
             continue
-        check = gemini(f"""Quelle:\n{text}\n\nSprechtext:\n{d['script']}\n
-Nenne alle Aussagen im Sprechtext, die NICHT durch die Quelle gedeckt sind.
+        check = ask(f"""Quelle:\n{text}\n\nSprechtext:\n{d['script']}\n
+Nenne nur Tatsachenbehauptungen im Sprechtext, die in der Quelle fehlen oder ihr widersprechen.
+Ignoriere Fragen, Übergänge und Formulierungen ohne Tatsachenaussage.
 JSON: {{"unsupported": ["..."]}}""")
         if check.get("unsupported"):
+            print("verworfen (nicht belegt):", title, str(check["unsupported"])[:150])
             continue
         dur, mouth = tts(d["script"], f"{OUT}/voice.mp3")
         if dur < MIN_SEC:
+            print(f"verworfen (nur {dur:.0f} s lang):", title)
             continue
         return title, d, dur, mouth
     raise SystemExit("Kein passender Fakt gefunden")
