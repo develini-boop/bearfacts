@@ -15,13 +15,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests numpy pillow edge-tts
-      - run: python comments.py
-        continue-on-error: true
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          IG_USER_ID: ${{ secrets.IG_USER_ID }}
-          IG_TOKEN: ${{ secrets.IG_TOKEN }}
       - run: python bear_facts.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
