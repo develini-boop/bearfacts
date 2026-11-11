@@ -44,12 +44,12 @@ def ask_groq(prompt):
 def ask(prompt):
     """Antwort als JSON: erst Groq (falls Key vorhanden), dann Gemini."""
     if GROQ_KEY:
-        for _ in range(2):
+        for _ in range(3):
             out = ask_groq(prompt)
             if out is not None:
-                time.sleep(6)  # Gratis-Limit einhalten
+                time.sleep(12)  # Gratis-Limit (Tokens pro Minute) einhalten
                 return out
-            time.sleep(15)
+            time.sleep(30)
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"}}
     for attempt in range(3 if MODELS else 0):
@@ -93,7 +93,7 @@ def article(log):
     r = requests.get(api, headers=ua, timeout=30, params={
         "action": "query", "prop": "extracts", "explaintext": 1, "exlimit": 1, "titles": title, "format": "json"}).json()
     p = next(iter(r["query"]["pages"].values()))
-    return title, p.get("extract", "")[:6000]
+    return title, p.get("extract", "")[:4000]
 
 
 def tts(text, path):
